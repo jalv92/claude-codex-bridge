@@ -1,0 +1,7 @@
+Use the installed Claude-Codex bridge for this task only. Resolve its absolute entrypoint
+and runtime from the installed /codex-loop command. Before work, run arm --project PROJECT
+--task TASK. Save the returned job ID. At completion, fill draft/prompt.md and draft/request.json
+with the committed final target, bounded scope, actual checks and artifact metadata.
+Run submit JOB_ID only when the package is complete. The matching Stop hook launches Codex.
+Report the job ID and status command. Do not copy prompts between applications, commit
+merely to satisfy the bridge, or infer authority for another task.

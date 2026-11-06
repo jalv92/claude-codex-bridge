@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "language": {
+      "type": "string",
+      "enum": [
+        "en"
+      ]
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "base_commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "final_commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100000
+        },
+        "allowed_commands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "scratch_write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "description",
+        "allowed_commands",
+        "scratch_write"
+      ],
+      "additionalProperties": false
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 7200
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "copy",
+              "reference"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          }
+        },
+        "required": [
+          "path",
+          "mode",
+          "purpose"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 10000
+    }
+  },
+  "required": [
+    "schema_version",
+    "language",
+    "prompt",
+    "base_commit",
+    "final_commit",
+    "scope",
+    "timeout_seconds",
+    "artifacts"
+  ],
+  "additionalProperties": false
+}

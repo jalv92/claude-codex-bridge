@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="698" viewBox="0 0 1400 698" role="img" aria-labelledby="title">
+<title id="title">Actual loop-begin CLI help output</title>
+<rect width="1400" height="698" rx="16" fill="#0d1117"/>
+<text x="32" y="38" font-family="monospace" font-size="18" fill="#8b949e">Claude–Codex Bridge · CLI reference</text>
+<text x="32" y="82" xml:space="preserve" font-family="monospace" font-size="20" fill="#79c0ff">$ python3 tools/claude-codex-bridge/bridge.py loop-begin --help</text>
+<text x="32" y="108" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3"></text>
+<text x="32" y="134" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">usage: bridge.py loop-begin [-h] --project PROJECT --task TASK --file FILES</text>
+<text x="32" y="160" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">                            [--check CHECK] [--session SESSION]</text>
+<text x="32" y="186" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">                            [--session-cwd SESSION_CWD] [--create-project]</text>
+<text x="32" y="212" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">                            [--manual-peer] [--read-only-review]</text>
+<text x="32" y="238" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">                            [--max-rounds MAX_ROUNDS] [--timeout TIMEOUT]</text>
+<text x="32" y="264" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3"></text>
+<text x="32" y="290" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">options:</text>
+<text x="32" y="316" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  -h, --help            show this help message and exit</text>
+<text x="32" y="342" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --project PROJECT</text>
+<text x="32" y="368" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --task TASK</text>
+<text x="32" y="394" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --file FILES</text>
+<text x="32" y="420" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --check CHECK</text>
+<text x="32" y="446" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --session SESSION</text>
+<text x="32" y="472" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --session-cwd SESSION_CWD</text>
+<text x="32" y="498" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --create-project      Create/enable the explicit project folder without</text>
+<text x="32" y="524" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">                        requiring Git or commits</text>
+<text x="32" y="550" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --manual-peer         Disable automatic terminal opening for this task</text>
+<text x="32" y="576" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --read-only-review    Use restricted read-only review instead of the normal</text>
+<text x="32" y="602" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">                        Codex CLI tools</text>
+<text x="32" y="628" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --max-rounds MAX_ROUNDS</text>
+<text x="32" y="654" xml:space="preserve" font-family="monospace" font-size="20" fill="#e6edf3">  --timeout TIMEOUT</text>
+</svg>

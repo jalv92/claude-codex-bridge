@@ -1,0 +1,20 @@
+Use the local Claude–Codex review/correction loop for this task only.
+Follow docs/conversations.md in the bridge checkout.
+Before work, call loop-begin for this project and session, with explicit source paths,
+acceptance criteria and bounded checks. Limit the exchange to 3 rounds and 1800 seconds.
+Use the default native-tool mode. Codex may use its configured CLI tools and integrations,
+including editing and image tools when available, with normal sandboxing and approvals.
+Include task-required asset paths in scope. Do not force --read-only-review for this task.
+Use automatic window opening: after publication, the Stop hook opens WSL and the paired
+native Codex console without asking me to run a command. Report an actual launch failure.
+For a new standalone website, select a meaningful project directory and use --create-project;
+no repository or commit is required. Never use the bridge's smoke-test or runtime folders.
+When implementation and checks finish, save an English review message in the returned
+conversation directory and publish it with loop-send CONVERSATION_ID --message-file PATH.
+End your response so the matching Stop hook can deliver it. When Codex replies, acknowledge
+receipt, independently assess its findings, correct only this task's scope and resubmit
+after reading any live files or assets Codex already changed; do not overwrite its work.
+Use --in-reply-to ROUND. Stop on VERIFIED, NOT_VERIFIABLE, a limit or a human decision.
+Do not search other chats, re-arm automatically, commit, push or expand the task's budget.
+For trading/research tasks: inspect evidence independently, distinguish correctness from economic
+success, and do not trade live, start a training campaign or expand experiment budgets.

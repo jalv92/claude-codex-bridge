@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9_-]{1,100}$"
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "session_cwd": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "created_at": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "readiness": {
+      "type": "string",
+      "enum": [
+        "READY_FOR_REVIEW"
+      ]
+    },
+    "language": {
+      "type": "string",
+      "enum": [
+        "en"
+      ]
+    },
+    "base_commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "final_commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40,64}$"
+    },
+    "base_branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "final_branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100000
+    },
+    "prompt": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "prompt.md"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "review_policy": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "reviewer.md"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "result_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "result.schema.json"
+          ]
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100000
+        },
+        "allowed_commands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "minItems": 0,
+          "maxItems": 10000
+        },
+        "scratch_write": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "description",
+        "allowed_commands",
+        "scratch_write"
+      ],
+      "additionalProperties": false
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 7200
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "copy",
+              "reference"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "stat": {
+            "type": "object",
+            "properties": {
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mtime_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ctime_ns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "device": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "inode": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "size",
+              "mtime_ns",
+              "ctime_ns",
+              "device",
+              "inode"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "source",
+          "path",
+          "mode",
+          "purpose",
+          "sha256",
+          "stat"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "maxItems": 10000
+    }
+  },
+  "required": [
+    "schema_version",
+    "job_id",
+    "session_id",
+    "task_id",
+    "session_cwd",
+    "project",
+    "created_at",
+    "readiness",
+    "language",
+    "base_commit",
+    "final_commit",
+    "base_branch",
+    "final_branch",
+    "prompt",
+    "review_policy",
+    "result_schema",
+    "scope",
+    "timeout_seconds",
+    "artifacts"
+  ],
+  "additionalProperties": false
+}

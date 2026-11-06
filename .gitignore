@@ -1,0 +1,11 @@
+/tmp/
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+.codex/
+.DS_Store
+Thumbs.db
