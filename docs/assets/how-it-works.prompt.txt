@@ -1,0 +1,34 @@
+Generation method: built-in imagegen, with author-supplied style and product references.
+Asset: how-it-works.png
+The references are not redistributed with this prompt. Product marks identify the two
+CLI tools; this independent project is not endorsed by either vendor.
+
+Use case: infographic-diagram.
+Create a NEW polished illustrated explainer infographic for the public GitHub README of "Claude–Codex Bridge".
+Reference image 1 is STYLE ONLY: borrow its light blueprint-grid background, elegant colored architecture cards, soft pastel fills, crisp outlines, subtly dimensional illustrations, and sweeping colored directional arrows. Do not copy its coastal subject, its dense text, its title, its tiny labels, or its layout verbatim.
+Reference image 2 is PRODUCT IDENTITY ONLY: the real Claude Code terminal on the left shows its coral pixel-art mascot; the Codex CLI on the right shows the OpenAI interlocking knot. Use those recognizable product marks next to their respective names. Do not copy the terminal screenshot or any private paths. Keep the Claude pixel mascot and OpenAI knot visually distinct and faithful, with a clear OpenAI six-loop knot, not a generic atom.
+
+The concept: two AI coding agents TALK TO EACH OTHER through a small local bridge, working in turns on one project. Make this understandable at a glance to a nontechnical reader. Friendly illustrated terminal-shaped AI agents, professional editorial quality, not childish cartoon robots. Claude Code has a warm terracotta/coral palette and its pixel mascot. Codex CLI has a cool teal/blue palette and the OpenAI knot. The bridge is a smaller violet central hub with an understated bridge-and-message icon. All text in ENGLISH.
+
+Composition: generous landscape canvas, approximately 16:10, high resolution, a centered title, a simple user-start chip near the top-left, two large equal-weight agent cards occupying the left and right thirds, small bridge hub in the middle. A thick upper arrow travels FROM Claude TO the bridge TO Codex. A clearly separated lower arrow travels FROM Codex TO the bridge TO Claude. Use conspicuous arrowheads and contrasting warm/cool colors so direction is unmistakable. Label arrows simply. At the bottom, a wide compact shared-project card with a tiny tasteful isometric illustration of code files and image assets; visually show both agents take turns on this project. End with a green check chip explaining the stopping condition, not an endless autonomous loop.
+
+Use ONLY these exact short text labels, with impeccable spelling, large typography and a clean readable hierarchy:
+Title: "Claude–Codex Bridge"
+Subtitle: "Two AI agents. One shared task."
+User-start chip: "1  You start with /codex-loop"
+Left card title: "Claude Code"
+Left card copy, two lines: "Builds the task" and "Applies feedback"
+Small left card label: "AI agent"
+Center hub: "Local bridge"
+Center hub small label: "Automatic handoff"
+Right card title: "Codex CLI"
+Right card copy, two lines: "Reviews and improves" and "Uses its CLI tools"
+Small right card label: "AI agent"
+Upper arrow label: "Task + files"
+Lower arrow label: "Findings + edits"
+Bottom card title: "Shared project"
+Bottom card subtitle: "Take turns. Improve. Verify."
+Green ending chip: "Stop when verified or the limit is reached"
+Footer: "Explicit opt-in  •  Bounded rounds  •  Normal approvals"
+
+Visual style: premium technical infographic, like a clear modern research-framework illustration, with gentle paper texture, restrained pastel backgrounds, fine blue-gray linework and small isometric details. Very light almost-white background with a faint blue grid, dark navy text, coral left, teal right, lavender center. Plenty of whitespace. Minimal text, large readable labels that remain readable at 840px README width. Avoid spaghetti arrows, crossing lines, flowchart jargon, sequence-diagram lifelines, tiny technical notes, fake UI buttons, watermarks and decorative nonsense. This is an independent tool using these product logos, not an official endorsement or joint product.

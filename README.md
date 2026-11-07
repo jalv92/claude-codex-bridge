@@ -95,25 +95,11 @@ Explicit `--read-only-review` selects the restricted reviewer instead.
 
 ## How it works
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant C as Claude Code
-    participant B as Local bridge
-    participant X as Codex CLI
-    U->>C: /codex-loop task
-    C->>B: Arm task, publish frozen input
-    C->>B: Stop hook
-    B->>X: Open console and send task
-    X->>X: Inspect, use tools, make scoped edits
-    X->>B: Structured verdict and findings
-    B->>C: Automatic reply and change inventory
-    C->>C: Acknowledge and inspect current files
-    opt Findings remain within the budget
-        C->>B: Correct and publish next round
-        B->>X: Continue the same Codex thread
-    end
-```
+<a href="docs/assets/how-it-works.png"><img src="docs/assets/how-it-works.png" width="100%" alt="Claude Code and Codex CLI communicate through the local bridge: Claude sends the task and files, Codex returns findings and edits, and both take turns improving the shared project until verified or the limit is reached."></a>
+
+Start with `/codex-loop`. Claude builds and hands off the task; Codex reviews or improves
+it and sends the result back. They take turns within your chosen scope and budget, using
+their available tools and normal approvals. Click the illustration to view it full size.
 
 The bridge uses a task-local Codex app-server and its native terminal UI. It does not
 type into another application's window, search existing chats, or run a permanent daemon.
