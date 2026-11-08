@@ -1,5 +1,7 @@
 """Offline conversation state, opt-in, delivery and bounded peer tests."""
 import concurrent.futures
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -431,6 +433,110 @@ class ConversationTests(unittest.TestCase):
         self.assertIn("interactive terminal", r.stderr)
         self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
         self.loops.cancel(self.id); hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_propose_window_asks_until_yes_then_applies(self):
+        self.begin(read_only_review=False, propose=True)
+        self.send()
+        detached = []
+        class WindowPeer:
+            thread_id = "window-thread"
+            ui = None
+            def __init__(_self, *args): pass
+            def review(_self, prompt, cwd, deadline, cancelled):
+                (cwd / "example.py").write_text("value = 2\n")
+                return result(), "window-turn"
+            def detach_ui(_self): detached.append(True)
+            def close(_self): pass
+        lines = iter([None, "maybe\n", "yes\n"])
+        out = io.StringIO()
+        with patch("conversation.claude_parent", return_value=None), contextlib.redirect_stdout(out), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            hook = pool.submit(self.loops.hook, self.event())
+            state = self.loops.peer(self.id, True, WindowPeer, read_line=lambda: next(lines))
+            feedback = hook.result(timeout=5)
+        self.assertEqual((state["state"], state["human_decision"]), ("COMPLETED", "APPLIED"))
+        self.assertEqual(detached, [True])  # the chat console closes before the question
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 2\n")
+        self.assertIn("+value = 2", out.getvalue()); self.assertIn("Type yes or no", out.getvalue())
+        self.assertIn("APPLIED", feedback)
+
+    def test_propose_window_reject_passes_reason_to_claude(self):
+        peer, hook = self.propose_round()
+        lines = iter(["no\n", "Too broad\n"])
+        with patch("conversation.claude_parent", return_value=None), contextlib.redirect_stdout(io.StringIO()):
+            self.loops.ask_in_window(self.id, lambda: next(lines))
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
+        self.assertIn("Too broad", hook.result(timeout=5))
+        self.loops.cancel(self.id); peer.result(timeout=5)
+
+    def test_propose_window_stops_asking_when_decided_elsewhere(self):
+        peer, hook = self.propose_round()
+        def decided_from_terminal_b():
+            self.loops.decide(self.id, apply=True)
+            return None
+        out = io.StringIO()
+        with patch("conversation.claude_parent", return_value=None), contextlib.redirect_stdout(out):
+            self.loops.ask_in_window(self.id, decided_from_terminal_b)
+        self.assertIn("Already decided", out.getvalue())
+        hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_propose_window_retries_after_a_recoverable_failure(self):
+        peer, hook = self.propose_round()
+        busy = contextlib.ExitStack()
+        busy.enter_context(self.loops.project_lock(str(self.repo)))  # a native editor holds the project
+        answers = []
+        def reader():
+            if answers:
+                busy.close()
+            answers.append("yes")
+            return "yes\n"
+        out = io.StringIO()
+        with patch("conversation.claude_parent", return_value=None), contextlib.redirect_stdout(out):
+            self.loops.ask_in_window(self.id, reader)
+        self.assertIn("did not complete", out.getvalue()); self.assertIn("still waiting", out.getvalue())
+        self.assertEqual(len(answers), 2)
+        self.assertEqual(self.loops.read(self.id)["human_decision"], "APPLIED")
+        hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_propose_window_flushes_typeahead_after_asking(self):
+        peer, hook = self.propose_round()
+        out, events = io.StringIO(), []
+        class Reader:
+            def flush(_self):
+                events.append(("flush", "Type yes to apply" in out.getvalue()))
+            def __call__(_self):
+                events.append(("read", None))
+                return "no\n" if len(events) == 2 else "\n"
+        with patch("conversation.claude_parent", return_value=None), contextlib.redirect_stdout(out):
+            self.loops.ask_in_window(self.id, Reader())
+        self.assertEqual(events[0], ("flush", True))  # the question was on screen before the flush
+        self.assertEqual(self.loops.read(self.id)["human_decision"], "REJECTED")
+        self.loops.cancel(self.id); hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_propose_window_reports_an_ended_task_truthfully(self):
+        peer, hook = self.propose_round()
+        def claude_exited(identifier, s):
+            self.loops.stop(identifier, "The originating Claude process closed", "INTERRUPTED")
+            return True
+        out = io.StringIO()
+        with patch.object(self.loops, "origin_closed", side_effect=claude_exited), contextlib.redirect_stdout(out):
+            self.loops.ask_in_window(self.id, lambda: self.fail("must not read an answer"))
+        self.assertIn("The task ended (INTERRUPTED)", out.getvalue())
+        self.assertNotIn("Already decided", out.getvalue())
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
+        hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_console_lines_keeps_lines_that_arrive_together(self):
+        from conversation import ConsoleLines
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        os.write(w, b"no\nToo broad\n")
+        lines = ConsoleLines(r)
+        self.assertEqual((lines(), lines(timeout=0)), ("no\n", "Too broad\n"))
+        self.assertIsNone(lines(timeout=0))
+        os.close(w)
+        with self.assertRaises(InterruptedError):
+            lines(timeout=0)
 
     def test_propose_and_read_only_are_exclusive(self):
         with self.assertRaisesRegex(BridgeError, "propose"):

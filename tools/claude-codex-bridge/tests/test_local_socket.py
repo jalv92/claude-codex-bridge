@@ -138,6 +138,19 @@ class SocketTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "checked"):
             peer.review("data", Path("/project"), time.monotonic() + 1, lambda: False)
 
+    def test_detach_ui_closes_console_and_keeps_its_exit_code(self):
+        peer = CodexPeer.__new__(CodexPeer)
+        peer.terminal_settings = None
+        class Console:
+            returncode = None
+            def poll(s): return s.returncode
+            def terminate(s): s.returncode = -15
+            def wait(s, timeout=None): return s.returncode
+        peer.ui = Console()
+        peer.detach_ui()
+        self.assertIsNone(peer.ui)
+        self.assertEqual(peer.last_ui_exit, -15)
+
     def test_propose_turn_pins_scratch_only_offline_sandbox(self):
         from codex_peer import PROPOSE_SANDBOX
         peer = CodexPeer.__new__(CodexPeer)

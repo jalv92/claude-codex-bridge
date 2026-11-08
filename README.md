@@ -61,8 +61,17 @@ Every mode stops on a `VERIFIED` verdict or after 3 rounds by default, and never
 
 Codex works in a scratch copy of the scoped files. Its shell can write only there and to
 temp directories, with no network, no MCP servers or apps, and no way to ask for extra
-permissions. When its turn ends, the bridge diffs that copy against the round's snapshot
-and waits. Claude is not woken until you decide, from a terminal outside Claude:
+permissions. When its turn ends, the bridge diffs that copy against the round's snapshot,
+closes Codex's chat in that window and asks you there:
+
+```text
+Codex proposes the change above. Nothing is applied yet.
+Type yes to apply it to the project, or no to reject it:
+```
+
+Claude is not woken until you answer. If you reject, you can add a reason for Claude.
+Any typing done before the question is discarded, so a stray `yes` cannot approve it.
+From any other terminal outside Claude the same decision is available as commands:
 
 ```bash
 python3 tools/claude-codex-bridge/bridge.py loop-diff CONVERSATION_ID

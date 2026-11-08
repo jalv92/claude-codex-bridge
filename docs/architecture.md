@@ -40,6 +40,9 @@ ignores, caches such as `__pycache__`, links and credential paths are discarded 
 in `proposal.json`. The proposal is frozen under `round-NNN/proposal/` with `proposed.diff`
 and hashed. The round enters AWAITING_HUMAN.
 
+In a visible peer, the bridge then closes the native console (the thread stays on the
+server and the next round reopens it), restores the terminal, discards pending typeahead and
+asks for yes or no in that window. The question stops if the decision is made elsewhere.
 `loop-apply` and `loop-reject` print the diff and require an interactive terminal and a typed
 `yes`. They refuse to run under a Claude process, and review children are already barred from
 bridge mutations. This guards against accidental self-approval; like the other locks, it is

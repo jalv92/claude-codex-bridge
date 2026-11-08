@@ -5,11 +5,13 @@ from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
+import select
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import termios
 import threading
 import time
 import uuid
@@ -29,6 +31,32 @@ SCRATCH_JUNK = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "n
 EDIT_MODES = ("native", "propose")
 TEMPLATES = {"native": "conversation-collaborator.md", "propose": "conversation-proposer.md",
              "read-only": "conversation-reviewer.md"}
+
+
+class ConsoleLines:
+    """Lines typed in this console, read from the raw fd with our own buffer, so select()
+    never misses input already buffered elsewhere. Returns None while nothing is typed."""
+    def __init__(self, fd):
+        self.fd, self.buffer = fd, b""
+
+    def __call__(self, timeout=.5):
+        if b"\n" not in self.buffer:
+            ready, _, _ = select.select([self.fd], [], [], timeout)
+            if not ready:
+                return None
+            chunk = os.read(self.fd, 4096)
+            if not chunk:
+                raise InterruptedError("The console was closed")
+            self.buffer += chunk
+            if b"\n" not in self.buffer:
+                return None
+        line, self.buffer = self.buffer.split(b"\n", 1)
+        return line.decode(errors="replace") + "\n"
+
+    def flush(self):
+        """Drop anything typed before the question, including our own buffer."""
+        termios.tcflush(self.fd, termios.TCIFLUSH)
+        self.buffer = b""
 
 
 def umask():
@@ -174,8 +202,9 @@ class Conversations:
             self.log(directory, "user", "Explicit opt-in for this task and this Claude session", task=args.task)
         human = {}
         if mode == "propose":
-            human = {"human_gate": "Codex edits a scratch copy. Tell the user to review each proposal from a "
-                         "terminal outside Claude; the exchange waits for their decision.",
+            human = {"human_gate": "Codex edits a scratch copy. When Codex finishes, its window shows the diff and "
+                         "asks the user to type yes or no there. Tell the user to answer in that window. The commands "
+                         "below are a fallback from a terminal outside Claude. Never run them yourself.",
                      "diff_command": self.command("loop-diff", identifier),
                      "apply_command": self.command("loop-apply", identifier),
                      "reject_command": self.command("loop-reject", identifier, "--reason", "REASON")}
@@ -478,6 +507,66 @@ class Conversations:
         rd, _ = self.proposal(self.read(identifier))
         return (rd / "proposed.diff").read_text(errors="replace")
 
+    def origin_closed(self, identifier, s):
+        """Stop the task if the Claude session that asked for it has exited."""
+        origin = s.get("claude_process")
+        if origin and origin["pid_namespace"] == process(os.getpid())["pid_namespace"] and not alive(origin):
+            self.stop(identifier, "The originating Claude process closed", "INTERRUPTED")
+            return True
+        return False
+
+    def ask_in_window(self, identifier, read_line):
+        """Proposal mode: show the diff in the Codex window and take the human's decision there."""
+        flush = getattr(read_line, "flush", None)
+        def answer(prompt, first=False):
+            print(prompt, end="", flush=True)
+            if first and flush:
+                flush()  # only a line typed after the question can count as the answer
+            while True:
+                s = self.read(identifier)
+                if s["state"] != "AWAITING_HUMAN" or self.origin_closed(identifier, s):
+                    s = self.read(identifier)
+                    if s.get("human_decision"):
+                        print(f"\nAlready decided from another terminal: {s['human_decision']}.", flush=True)
+                    else:
+                        print(f"\nThe task ended ({s['state']}): {s.get('error') or 'no reason recorded'}. "
+                              "Nothing was applied.", flush=True)
+                    return None
+                line = read_line()
+                if line is not None:
+                    return line.strip()
+        while True:
+            try:
+                text = self.diff(identifier)
+            except BridgeError as exc:
+                if self.read(identifier)["state"] == "AWAITING_HUMAN":
+                    print(f"Cannot show the proposal here: {exc}", flush=True)
+                    return
+                return answer("")  # decided or ended elsewhere in the meantime; report which
+            print("\n" + text, flush=True)
+            choice = answer("Codex proposes the change above. Nothing is applied yet.\n"
+                            "Type yes to apply it to the project, or no to reject it: ", first=True)
+            while choice is not None and choice.lower() not in ("yes", "no"):
+                choice = answer("Type yes or no: ")
+            if choice is None:
+                return
+            apply = choice.lower() == "yes"
+            reason = None if apply else answer("Reason for Claude (optional, Enter to skip): ")
+            if not apply and reason is None:
+                return
+            try:
+                self.decide(identifier, apply, reason or None)
+                print(("Applied to the project." if apply else "Rejected. Nothing changed.") +
+                      " Claude continues on its own.", flush=True)
+                return
+            except BridgeError as exc:
+                # The error text says whether anything was written (e.g. "failed part-way").
+                print(f"The decision did not complete: {exc}", flush=True)
+            if self.read(identifier)["state"] != "AWAITING_HUMAN":
+                return
+            print("The proposal is still waiting. Answer again here, or use loop-apply / loop-reject "
+                  "from another terminal outside Claude.", flush=True)
+
     def decide(self, identifier, apply, reason=None):
         """The human gate: only a person outside Claude/Codex may apply or reject a proposal."""
         if claude_parent():
@@ -709,7 +798,7 @@ class Conversations:
             self.log(directory, "claude", "Feedback receipt acknowledged", round=number)
         return {"conversation_id": identifier, "acknowledged_round": number}
 
-    def peer(self, identifier, visible=True, peer_factory=None):
+    def peer(self, identifier, visible=True, peer_factory=None, read_line=None):
         from codex_peer import CodexPeer
         directory = self.directory(identifier)
         peer = None
@@ -760,9 +849,7 @@ class Conversations:
                     s = self.read(identifier)
                     if s["state"] in FINAL:
                         break
-                    origin = s.get("claude_process")
-                    if origin and origin["pid_namespace"] == process(os.getpid())["pid_namespace"] and not alive(origin):
-                        self.stop(identifier, "The originating Claude process closed", "INTERRUPTED")
+                    if self.origin_closed(identifier, s):
                         break
                     if time.time() >= s["expires_epoch"]:
                         self.stop(identifier, "Conversation deadline reached", "TIMED_OUT")
@@ -793,9 +880,7 @@ class Conversations:
                         print(f"Claude -> Codex, round {s['round']}: {request['message']}", flush=True)
                     def cancelled():
                         current = self.read(identifier)
-                        origin = current.get("claude_process")
-                        if origin and origin["pid_namespace"] == process(os.getpid())["pid_namespace"] and not alive(origin):
-                            self.stop(identifier, "The originating Claude process closed", "INTERRUPTED")
+                        if self.origin_closed(identifier, current):
                             return True
                         return current["state"] in FINAL
                     working_dir = {"native": Path(s["project"]), "propose": directory / "work"}.get(
@@ -804,6 +889,11 @@ class Conversations:
                         time.monotonic() + max(0, s["expires_epoch"] - time.time()),
                         cancelled)
                     accepted = self.reply(identifier, result, turn_id)
+                    if (accepted and visible and (read_line or sys.stdin.isatty())
+                            and self.read(identifier)["state"] == "AWAITING_HUMAN"):
+                        # The decision happens right here, so the console must stop taking chat input.
+                        getattr(peer, "detach_ui", lambda: None)()
+                        self.ask_in_window(identifier, read_line or ConsoleLines(sys.stdin.fileno()))
                     if not visible:
                         if accepted:
                             print(f"Codex -> Claude: {result['verdict']}: {result['summary']}", flush=True)

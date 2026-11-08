@@ -125,6 +125,7 @@ def native_env(config):
 
 class CodexPeer:
     propose = False
+    last_ui_exit = None
 
     def __init__(self, config, directory, project, instructions, visible=True):
         from bridge import child_env
@@ -281,14 +282,19 @@ class CodexPeer:
                 pass
             raise
 
-    def close(self):
-        if self.ui is not None and self.ui.poll() is None:
-            self.ui.terminate()
-            try:
-                self.ui.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.ui.kill()
-                self.ui.wait()
+    def detach_ui(self):
+        """Close the native console and hand the terminal back to the bridge.
+        The thread stays on the server; the next turn reopens the console."""
+        if self.ui is not None:
+            if self.ui.poll() is None:
+                self.ui.terminate()
+                try:
+                    self.ui.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.ui.kill()
+                    self.ui.wait()
+            self.last_ui_exit = self.ui.returncode
+            self.ui = None
         if self.terminal_settings is not None:
             try:
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self.terminal_settings)
@@ -296,6 +302,9 @@ class CodexPeer:
                 sys.stdout.flush()
             except OSError:
                 pass  # A closed terminal must not prevent server/process cleanup.
+
+    def close(self):
+        self.detach_ui()
         if self.rpc is not None:
             self.rpc.close()
             self.rpc = None
@@ -305,7 +314,7 @@ class CodexPeer:
             terminate_owned(descendants(os.getpid()))
             atomic(self.directory / "process-status.json", {"closed_at": now(),
                 "server": self.server_identity, "server_exit_code": self.server.returncode,
-                "ui_exit_code": self.ui.returncode if self.ui else None})
+                "ui_exit_code": self.last_ui_exit})
             self.server = None
         self.log.close()
         # Remove only the socket directory created by this peer.
