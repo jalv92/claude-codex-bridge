@@ -108,6 +108,11 @@ def native_config():
     return {"features": {"hooks": False}, "notify": []}
 
 
+# Proposal mode: writes only inside the scratch cwd and temp dirs, no network, no escalation.
+PROPOSE_SANDBOX = {"type": "workspaceWrite", "writableRoots": [], "networkAccess": False,
+                   "excludeTmpdirEnvVar": False, "excludeSlashTmp": False}
+
+
 def native_env(config):
     from bridge import child_env
     env = dict(os.environ)
@@ -119,6 +124,8 @@ def native_env(config):
 
 
 class CodexPeer:
+    propose = False
+
     def __init__(self, config, directory, project, instructions, visible=True):
         from bridge import child_env
         import ctypes
@@ -127,9 +134,10 @@ class CodexPeer:
         self.directory = directory
         self.project = project
         self.config = config
-        self.native = config.get("conversation_mode") == "native"
+        self.native = config.get("conversation_mode") in ("native", "propose")
+        self.propose = config.get("conversation_mode") == "propose"
         self.visible = visible
-        if self.native and not visible:
+        if self.native and not self.propose and not visible:
             raise BridgeError("Native-tool conversations require the visible Codex console for approvals; use --read-only-review for headless reviews")
         self.terminal_settings = termios.tcgetattr(sys.stdin.fileno()) if visible and sys.stdin.isatty() else None
         self.env = native_env(config) if self.native else child_env(config)
@@ -144,6 +152,14 @@ class CodexPeer:
         self.socket = self.socket_dir / "peer.sock"
         self.log = open(directory / "server.stderr.log", "a", buffering=1)
         overrides = native_config() if self.native else reviewer_config(config, project)
+        if self.propose:
+            # MCP servers and apps run outside the shell sandbox and could write the live
+            # project, so proposal mode switches them off like the read-only reviewer does.
+            isolated = reviewer_config(config, project)
+            overrides.update(features=isolated["features"], mcp_servers=isolated["mcp_servers"])
+            # Pin the policy so a user's config.toml cannot add writable roots or network.
+            overrides.update(approval_policy="never", sandbox_workspace_write={"writable_roots": [],
+                "network_access": False, "exclude_tmpdir_env_var": False, "exclude_slash_tmp": False})
         self.overrides = overrides
         args = [config["codex"]]
         for k, v in overrides.items():
@@ -160,7 +176,8 @@ class CodexPeer:
                 if self.server.poll() is not None or time.monotonic() > deadline:
                     raise BridgeError("Private Codex server did not start; see server.stderr.log")
                 time.sleep(.05)
-            self.rpc = Rpc(self.socket, directory / "protocol.jsonl", delegate_requests=self.native)
+            # Headless proposal peers have no console: tool requests are denied, never answered for the user.
+            self.rpc = Rpc(self.socket, directory / "protocol.jsonl", delegate_requests=self.native and visible)
             self.rpc.call("initialize", {"clientInfo": {"name": "claude_codex_bridge", "version": "2.0.0"}})
             self.rpc.send({"method": "initialized", "params": {}})
             params = {"cwd": str(project), "config": overrides, "developerInstructions": instructions}
@@ -169,23 +186,30 @@ class CodexPeer:
                 # task explicitly authorizes project edits; retain the sandbox and
                 # inherited approval policy for anything requiring escalation.
                 params["sandbox"] = "workspace-write"
+                if self.propose:
+                    params["approvalPolicy"] = "never"
             else:
                 params.update(model=config["model"], approvalPolicy="never", sandbox="read-only")
             result = self.rpc.call("thread/start", params)
             if not self.native and (result.get("sandbox", {}).get("type") != "readOnly" or result.get("sandbox", {}).get("networkAccess") \
                     or result.get("approvalPolicy") != "never"):
                 raise BridgeError("Codex did not enforce the required read-only, offline tool sandbox and no escalation")
+            if self.propose and (result.get("sandbox") != PROPOSE_SANDBOX or result.get("approvalPolicy") != "never"):
+                raise BridgeError("Codex did not enforce the proposal sandbox: scratch-only writes, offline, no escalation")
             self.thread_id = result["thread"]["id"]
             self.thread_path = result["thread"].get("path")
             atomic(directory / "codex-thread.json", {"thread_id": self.thread_id,
                 "server": process(self.server.pid), "socket": str(self.socket),
                 "effective_config": overrides, "model": result.get("model", config["model"]),
                 "reasoning_effort": result.get("reasoningEffort"), "sandbox": result["sandbox"],
-                "mode": "native" if self.native else "read-only", "approval_policy": result.get("approvalPolicy"),
+                "mode": config.get("conversation_mode") if self.native else "read-only", "approval_policy": result.get("approvalPolicy"),
                 "approvals_reviewer": result.get("approvalsReviewer"),
                 "executable": config["codex"], "version": subprocess.check_output(
                     [config["codex"], "--version"], env=self.env, text=True, timeout=10).strip(),
-                "limitations": (["Native CLI tools and approvals are inherited; project writes use workspace-write sandboxing",
+                "limitations": (["Proposal mode: shell writes are limited to the scratch copy and temp directories; a human applies or rejects each diff",
+                    "MCP servers, apps, plugins and shell network access are disabled",
+                    "Reading other local files is not prevented; scope is an instruction"] if self.propose else
+                    ["Native CLI tools and approvals are inherited; project writes use workspace-write sandboxing",
                     "Tool availability depends on installed integrations and authentication",
                     "Lifecycle hooks and notify are disabled to prevent recursive dispatch",
                     "Task scope is an instruction, not a filesystem allowlist; Claude must wait while Codex edits"] if self.native else
@@ -201,7 +225,9 @@ class CodexPeer:
         params = {"threadId": self.thread_id,
             "input": [{"type": "text", "text": prompt}], "cwd": str(cwd),
             "outputSchema": RESULT}
-        if not self.native:
+        if self.propose:
+            params.update(approvalPolicy="never", sandboxPolicy=PROPOSE_SANDBOX)
+        elif not self.native:
             params.update(approvalPolicy="never", sandboxPolicy={"type": "readOnly", "networkAccess": False})
         result = self.rpc.call("turn/start", params)
         turn_id = result["turn"]["id"]

@@ -130,13 +130,13 @@ def claude_parent():
     return None
 
 
-def git(project, *args, timeout=30, binary=False):
+def git(project, *args, timeout=30, binary=False, input=None, ok=(0,)):
     env = {"PATH": "/usr/bin:/bin", "HOME": str(Path.home()),
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
            "GIT_OPTIONAL_LOCKS": "0"}
     r = subprocess.run(["/usr/bin/git", "-C", str(project), *args],
-                       capture_output=True, timeout=timeout, env=env)
-    if r.returncode:
+                       capture_output=True, timeout=timeout, env=env, input=input)
+    if r.returncode not in ok:
         raise BridgeError("Git failed: " + r.stderr.decode(errors="replace").strip()[:1000])
     return r.stdout if binary else r.stdout.decode().strip()
 

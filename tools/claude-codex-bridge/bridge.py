@@ -796,7 +796,8 @@ def main():
                         print(message, file=sys.stderr)
                         return 2  # asyncRewake delivers this only to the originating Claude session.
         elif args.command.startswith("loop-") or args.command == "configure-terminal":
-            emit(dispatch(bridge, args))
+            out = dispatch(bridge, args)
+            print(out, end="") if isinstance(out, str) else emit(out)
             if args.command == "loop-peer" and args.hold and sys.stdin.isatty():
                 try:
                     input("Task finished. The review and status are saved above. Press Enter to close this window. ")

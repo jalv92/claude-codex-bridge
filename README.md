@@ -8,6 +8,7 @@
 </p>
 
 <p>
+  <a href="#choose-a-mode">Choose a mode</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -32,6 +33,7 @@
 
 - **Explicit opt-in:** `/codex-loop` applies to one task, project and originating Claude session.
 - **Two-way collaboration:** Codex can inspect, edit and use its configured CLI tools; Claude receives the result and continues within the agreed scope.
+- **A human diff gate when you want one:** in proposal mode Codex edits a scratch copy, and nothing reaches your project until you apply its diff.
 - **A visible Codex console:** on WSL, Windows Terminal opens automatically after Claude publishes its handoff. Approvals stay in the native Codex UI.
 - **Bounded execution:** round limits, deadlines, cancellation, process tracking and saved reports.
 - **An independent audit option:** the separate saved-review mode runs `codex exec` against frozen committed code and declared artifacts.
@@ -41,6 +43,40 @@ and local paths; the CLI, templates and documentation are in English. Click to v
 The second screenshot shows the two CLI applications before a task is paired.
 
 <a href="docs/assets/two-consoles.png"><img src="docs/assets/two-consoles.png" width="100%" alt="Claude Code and Codex CLI in separate terminal windows before pairing"></a>
+
+## Choose a mode
+
+Reviewing and editing are separate permissions. Pick how much Codex may change:
+
+| You want | Ask Claude for | Codex writes to | Who applies the changes |
+|---|---|---|---|
+| Codex to fix what it finds | `/codex-loop` (default) | The live project, inside its sandbox | Codex, with normal CLI approvals |
+| To read every diff before it lands | `/codex-loop` in proposal mode (`--propose`) | A scratch copy only | **You:** `loop-apply` or `loop-reject` |
+| Review comments, no edits | `/codex-loop` in read-only mode (`--read-only-review`) | Nothing | Claude, after weighing the findings |
+| A one-off audit of a commit | [Saved review](docs/saved-reviews.md) | Nothing | Nobody: it writes a report |
+
+Every mode stops on a `VERIFIED` verdict or after 3 rounds by default, and never re-arms itself.
+
+### Proposal mode
+
+Codex works in a scratch copy of the scoped files. Its shell can write only there and to
+temp directories, with no network, no MCP servers or apps, and no way to ask for extra
+permissions. When its turn ends, the bridge diffs that copy against the round's snapshot
+and waits. Claude is not woken until you decide, from a terminal outside Claude:
+
+```bash
+python3 tools/claude-codex-bridge/bridge.py loop-diff CONVERSATION_ID
+python3 tools/claude-codex-bridge/bridge.py loop-apply CONVERSATION_ID
+python3 tools/claude-codex-bridge/bridge.py loop-reject CONVERSATION_ID --reason 'Too broad'
+```
+
+`loop-apply` and `loop-reject` print the diff and ask you to type `yes`. They need an
+interactive terminal and refuse to run under Claude. These checks stop an agent from
+approving its own peer's work by accident; they are not a hard boundary against a process
+running as your user. Apply also refuses if the project changed after the proposal, or while
+a native conversation is editing the same project. On reject, Claude still gets the findings
+as advice. Do not type a new prompt into Claude while a
+proposal waits: a new prompt ends the task's opt-in. Waiting counts against the deadline.
 
 ## Quick start
 
@@ -91,7 +127,8 @@ Replace `CONVERSATION_ID` with the exact ID returned for your task. Native-tool 
 the default: project writes use `workspace-write`; normal approval settings and managed
 policy still apply. CLI tool availability depends on your installation and account.
 Lifecycle hooks and notifications are disabled in the Codex child to prevent recursion.
-Explicit `--read-only-review` selects the restricted reviewer instead.
+Explicit `--read-only-review` selects the restricted reviewer instead, and `--propose`
+selects [proposal mode](#proposal-mode).
 
 ## How it works
 

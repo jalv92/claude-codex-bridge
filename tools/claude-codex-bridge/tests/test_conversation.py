@@ -315,6 +315,127 @@ class ConversationTests(unittest.TestCase):
                 self.loops.peer(self.id, True, lambda *args: self.fail("Must not launch"))
         self.assertEqual(self.loops.read(self.id)["state"], "BLOCKED")
 
+    def propose_round(self, verdict="VERIFIED"):
+        """Run one proposal turn headless; Codex edits only its scratch copy."""
+        self.begin(read_only_review=False, propose=True)
+        self.send()
+        work = self.loops.directory(self.id) / "work"
+        class ProposingPeer:
+            thread_id = "propose-thread"
+            ui = None
+            def __init__(_self, config, directory, project, instructions, visible):
+                self.assertEqual(config["conversation_mode"], "propose")
+                self.assertEqual(project, work)
+                self.assertIn("proposal", instructions)
+            def review(_self, prompt, cwd, deadline, cancelled):
+                self.assertEqual(cwd, work)
+                (cwd / "example.py").write_text("value = 2\n")
+                (cwd / "out-of-scope.txt").write_text("never proposed")
+                return result(verdict), "propose-turn"
+            def close(_self): pass
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.addCleanup(pool.shutdown, wait=True, cancel_futures=True)
+        peer = pool.submit(self.loops.peer, self.id, False, ProposingPeer)
+        hook = pool.submit(self.loops.hook, self.event())
+        self.wait_state({"AWAITING_HUMAN"})
+        return peer, hook
+
+    def test_propose_waits_for_human_and_applies_only_the_scoped_diff(self):
+        peer, hook = self.propose_round()
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
+        diff = self.loops.diff(self.id)
+        self.assertIn("-value = 1", diff); self.assertIn("+value = 2", diff)
+        self.assertNotIn("out-of-scope", diff)
+        self.assertFalse(hook.done())  # Claude is not woken before the human decides.
+        with patch("conversation.claude_parent", return_value={"pid": 1}):
+            with self.assertRaisesRegex(BridgeError, "human"):
+                self.loops.decide(self.id, apply=True)
+        with patch("conversation.claude_parent", return_value=None):
+            self.loops.decide(self.id, apply=True)
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 2\n")
+        feedback = hook.result(timeout=5)
+        self.assertEqual(peer.result(timeout=5)["state"], "COMPLETED")
+        self.assertIn("APPLIED", feedback)
+        self.loops.ack(self.id, 1, check_owner=False)
+
+    def test_propose_reject_keeps_project_and_tells_claude(self):
+        peer, hook = self.propose_round()  # VERIFIED describes the diff, so rejecting must not complete
+        with patch("conversation.claude_parent", return_value=None):
+            self.loops.decide(self.id, apply=False, reason="Too broad")
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
+        feedback = hook.result(timeout=5)
+        self.assertIn("REJECTED", feedback)
+        self.assertEqual(self.loops.read(self.id)["state"], "AWAITING_CLAUDE")
+        self.loops.ack(self.id, 1, check_owner=False)
+        self.loops.cancel(self.id)
+        peer.result(timeout=5)
+
+    def test_propose_apply_refuses_a_project_that_changed(self):
+        peer, hook = self.propose_round()
+        (self.repo / "example.py").write_text("someone else edited this\n")
+        with patch("conversation.claude_parent", return_value=None):
+            with self.assertRaisesRegex(BridgeError, "changed"):
+                self.loops.decide(self.id, apply=True)
+        self.assertEqual((self.repo / "example.py").read_text(), "someone else edited this\n")
+        self.assertEqual(self.loops.read(self.id)["state"], "BLOCKED")
+        hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_propose_scratch_inventory_keeps_known_files_and_discards_junk(self):
+        self.begin(read_only_review=False, propose=True, files=["example.py", "data"])
+        work = self.root / "scratch"
+        (work / "data/__pycache__").mkdir(parents=True)
+        (work / "example.py").write_text("value = 2\n")
+        (work / "data/tracked.bin").write_bytes(b"\1")   # in the snapshot although data/ is ignored
+        (work / "data/cache.bin").write_bytes(b"\0")     # new and ignored by the live project
+        (work / "data/__pycache__/x.pyc").write_bytes(b"\0")
+        (work / "data/link").symlink_to("/etc/hostname")
+        before = {"example.py": None, "data/tracked.bin": {"sha256": "old", "size": 1}}
+        files, discarded = self.loops.scratch_files(self.loops.read(self.id), work, before)
+        self.assertEqual(set(files), {"example.py", "data/tracked.bin"})
+        self.assertEqual(discarded, ["data/__pycache__/x.pyc", "data/cache.bin", "data/link"])
+
+    def test_propose_refuses_file_directory_swaps(self):
+        self.begin(read_only_review=False, propose=True, files=["d", "a.py"])
+        before = {"d/x": {"sha256": "x", "size": 1}, "a.py": {"sha256": "a", "size": 1}}
+        for make in (lambda w: (w / "d").write_text("now a file"),
+                     lambda w: ((w / "a.py").mkdir(), (w / "a.py/x").write_text("now a dir"))):
+            work = self.root / f"swap-{id(make)}"
+            work.mkdir()
+            make(work)
+            with self.assertRaisesRegex(BridgeError, "swapped a file and a directory"):
+                self.loops.scratch_files(self.loops.read(self.id), work, before)
+
+    def test_propose_scratch_copy_keeps_executable_bit(self):
+        self.begin(read_only_review=False, propose=True)
+        (self.repo / "example.py").chmod(0o755)
+        self.send()
+        s = self.loops.read(self.id)
+        rd, request = self.loops.request(s)
+        work = self.loops.prepare_work(self.loops.directory(self.id), rd, request, s["project"])
+        self.assertTrue(os.access(work / "example.py", os.X_OK | os.W_OK))
+
+    def test_propose_apply_waits_for_a_native_editor_on_the_same_project(self):
+        peer, hook = self.propose_round()
+        with self.loops.project_lock(str(self.repo)), patch("conversation.claude_parent", return_value=None):
+            with self.assertRaisesRegex(BridgeError, "native-tool conversation"):
+                self.loops.decide(self.id, apply=True)
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
+        self.loops.cancel(self.id); hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_propose_cli_requires_an_interactive_confirmation(self):
+        peer, hook = self.propose_round()
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "bridge.py"),
+                            "--runtime", str(self.runtime), "loop-apply", self.id],
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("interactive terminal", r.stderr)
+        self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
+        self.loops.cancel(self.id); hook.result(timeout=5); peer.result(timeout=5)
+
+    def test_propose_and_read_only_are_exclusive(self):
+        with self.assertRaisesRegex(BridgeError, "propose"):
+            self.begin(read_only_review=True, propose=True)
+
     def test_legacy_contract_stays_read_only(self):
         from conversation import IMMUTABLE
         from contracts import digest

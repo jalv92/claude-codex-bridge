@@ -1,10 +1,12 @@
 """Explicitly paired, bounded review/correction conversations."""
+import difflib
 import hashlib
 from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -20,6 +22,30 @@ FINAL = {"COMPLETED", "STOPPED", "CANCELLED", "LIMIT_REACHED", "TIMED_OUT", "FAI
 IMMUTABLE = ("schema_version", "conversation_id", "claude_session_id", "claude_cwd", "project",
              "task", "scope", "allowed_checks", "max_rounds", "created_at", "expires_epoch",
              "timeout_seconds", "policy_sha256", "claude_process")
+SENSITIVE = (".git", ".claude", ".codex", ".ssh")
+# Check by-products in Codex's scratch copy that are never proposed as new files.
+SCRATCH_JUNK = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules")
+# Modes in which Codex writes files (live project for native, scratch copy for propose).
+EDIT_MODES = ("native", "propose")
+TEMPLATES = {"native": "conversation-collaborator.md", "propose": "conversation-proposer.md",
+             "read-only": "conversation-reviewer.md"}
+
+
+def umask():
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
+
+
+def unified(rel, before, after):
+    """Unified diff of one file; bytes that are not UTF-8 text get a one-line note."""
+    try:
+        a, b = (x.decode().splitlines(keepends=True) if x is not None else [] for x in (before, after))
+    except UnicodeDecodeError:
+        return f"Binary file {rel} differs\n"
+    lines = difflib.unified_diff(a, b, "/dev/null" if before is None else f"a/{rel}",
+                                 "/dev/null" if after is None else f"b/{rel}")
+    return "".join(x if x.endswith("\n") else x + "\n\\ No newline at end of file\n" for x in lines)
 
 
 def contract_fields(s):
@@ -74,6 +100,8 @@ class Conversations:
 
     def begin(self, args):
         from bridge import WORKSPACE, DEFAULT_RUNTIME
+        if getattr(args, "propose", False) and getattr(args, "read_only_review", False):
+            raise BridgeError("Choose either --propose or --read-only-review, not both")
         project = Path(args.project).expanduser().resolve()
         if self.bridge.root == DEFAULT_RUNTIME and (project.is_relative_to(WORKSPACE / "tmp/claude-codex-conversation-smoke")
                                                    or project.is_relative_to(self.bridge.root)):
@@ -98,7 +126,7 @@ class Conversations:
             p = Path(raw)
             if p.is_absolute() or ".." in p.parts or not p.parts:
                 raise BridgeError("Scope paths must be relative files/directories without '..'")
-            if any(x in p.parts for x in (".git", ".claude", ".codex", ".ssh")) or p.name.startswith(".env"):
+            if any(x in p.parts for x in SENSITIVE) or p.name.startswith(".env"):
                 raise BridgeError("Configuration and credential paths cannot be review scope")
             paths.append(str(p))
         config = self.bridge.config()
@@ -125,9 +153,9 @@ class Conversations:
             directory = self.root / identifier
             directory.mkdir(mode=0o700)
             from bridge import SOURCE
-            mode = "read-only" if getattr(args, "read_only_review", False) else "native"
-            template = "conversation-collaborator.md" if mode == "native" else "conversation-reviewer.md"
-            atomic(directory / "reviewer.md", (SOURCE / "templates" / template).read_bytes())
+            mode = ("propose" if getattr(args, "propose", False) else
+                    "read-only" if getattr(args, "read_only_review", False) else "native")
+            atomic(directory / "reviewer.md", (SOURCE / "templates" / TEMPLATES[mode]).read_bytes())
             s = {"schema_version": 2, "conversation_id": identifier,
                 "claude_session_id": session, "claude_cwd": cwd, "project": str(project),
                 "task": args.task, "scope": sorted(set(paths)), "allowed_checks": args.check,
@@ -144,7 +172,14 @@ class Conversations:
             self.save(directory, s)
             atomic(pointer, {"conversation_id": identifier, "cwd": cwd})
             self.log(directory, "user", "Explicit opt-in for this task and this Claude session", task=args.task)
-        return {**s, "terminal": "Opens automatically after publication at Stop" if auto_open else "Manual peer explicitly selected",
+        human = {}
+        if mode == "propose":
+            human = {"human_gate": "Codex edits a scratch copy. Tell the user to review each proposal from a "
+                         "terminal outside Claude; the exchange waits for their decision.",
+                     "diff_command": self.command("loop-diff", identifier),
+                     "apply_command": self.command("loop-apply", identifier),
+                     "reject_command": self.command("loop-reject", identifier, "--reason", "REASON")}
+        return {**s, **human, "terminal": "Opens automatically after publication at Stop" if auto_open else "Manual peer explicitly selected",
                 "peer_command": self.command("loop-peer", identifier),
                 "send_command": self.command("loop-send", identifier, "--message-file", "MESSAGE_FILE"),
                 "directory": str(directory)}
@@ -163,11 +198,11 @@ class Conversations:
             names = set()
             for scope in s["scope"]:
                 p = project / scope
-                if s.get("codex_mode") == "native" and p.is_dir() and not p.is_symlink():
+                if s.get("codex_mode") in EDIT_MODES and p.is_dir() and not p.is_symlink():
                     names.update(str(child.relative_to(project)) for child in p.rglob("*")
                                  if child.is_file() or child.is_symlink())
                 else:
-                    if s.get("codex_mode") != "native" and not p.is_file():
+                    if s.get("codex_mode") not in EDIT_MODES and not p.is_file():
                         raise BridgeError("For read-only projects without Git, --file must name individual existing files")
                     names.add(scope)
             listed = b"\0".join(os.fsencode(p) for p in names)
@@ -179,7 +214,7 @@ class Conversations:
             rel = Path(os.fsdecode(raw))
             if not any(rel == Path(scope) or rel.is_relative_to(scope) for scope in s["scope"]):
                 continue
-            if any(x in rel.parts for x in (".git", ".claude", ".codex", ".ssh")) or rel.name.startswith(".env"):
+            if any(x in rel.parts for x in SENSITIVE) or rel.name.startswith(".env"):
                 raise BridgeError("A sensitive/configuration path is included in the scope")
             p = project / rel
             if not p.exists():
@@ -247,7 +282,8 @@ class Conversations:
             stage.rename(final)
             self.save(directory, s, state="READY", round=round_number,
                 request_sha256=digest(final / "request.json"), acknowledged_round=in_reply_to,
-                reply=None, error=None, wake_status=None, report=None, output_sha256=None, peer_changes=None)
+                reply=None, error=None, wake_status=None, report=None, output_sha256=None, peer_changes=None,
+                proposal=None, proposal_sha256=None, pending_state=None, human_decision=None, human_reason=None)
             self.log(directory, "claude", body, round=round_number, in_reply_to=in_reply_to)
         return {"conversation_id": identifier, "round": round_number, "state": "READY",
                 "dispatch": "Your matching Stop hook will deliver this message to the paired Codex session"}
@@ -297,6 +333,7 @@ class Conversations:
             if s.get("codex_mode") != "native" and files != request["files"]:
                 self.save(directory, s, state="BLOCKED", error="Project changed during review; do not apply stale findings")
                 return False
+            proposal = s.get("codex_mode") == "propose" and self.record_proposal(directory, rd, s, request)
             if s.get("codex_mode") == "native":
                 changes = {p: {"before": request["files"].get(p), "after": files.get(p)}
                            for p in request["files"].keys() | files.keys()
@@ -325,10 +362,181 @@ class Conversations:
             else:
                 state = "REPLY_READY"
             write_report(rd, result)
+            if proposal:
+                # Nothing reaches the project, and Claude is not woken, until a human decides.
+                state, s["pending_state"] = "AWAITING_HUMAN", state
             self.save(directory, s, state=state, reply=result, codex_turn_id=turn_id,
                       report=str(rd / "report.md"), response_at=now())
             self.log(directory, "codex", result["summary"], round=s["round"], result=result, turn_id=turn_id)
             return True
+
+    def scratch_files(self, s, work, before):
+        """Inventory Codex's scratch copy. Files from the round snapshot are always kept,
+        so a deletion is real. New files that the live project ignores, caches, links and
+        credential paths are discarded instead of proposed."""
+        names = set()
+        for scope in s["scope"]:
+            p = work / scope
+            if p.is_dir() and not p.is_symlink():
+                names.update(str(c.relative_to(work)) for c in p.rglob("*") if c.is_file() or c.is_symlink())
+            elif p.exists() or p.is_symlink():
+                names.add(scope)
+        new = names - before.keys()
+        discarded = {n for n in new if (work / n).is_symlink() or Path(n).name.startswith(".env")
+                     or any(x in Path(n).parts for x in (*SENSITIVE, *SCRATCH_JUNK))}
+        if (Path(s["project"]) / ".git").exists() and new - discarded:
+            # No --no-index: tracked files are never treated as ignored.
+            ignored = git(s["project"], "check-ignore", "-z", "--stdin", binary=True, ok=(0, 1),
+                          input=b"\0".join(os.fsencode(n) for n in sorted(new - discarded)))
+            discarded |= {os.fsdecode(x) for x in ignored.split(b"\0") if x}
+        known = {k for k, v in before.items() if v}
+        for rel in names - discarded - known:
+            # A new path under a snapshot file, or a file where a snapshot directory was.
+            if {str(x) for x in Path(rel).parents} & known or any(k.startswith(rel + "/") for k in known):
+                raise BridgeError(f"Codex swapped a file and a directory at {rel}; propose content changes only")
+        files, total = {}, 0
+        for rel in sorted(names - discarded):
+            p = work / rel
+            if p.is_symlink() or not p.is_file():
+                raise BridgeError(f"Codex replaced scoped file {rel} with a link or directory")
+            size = p.stat().st_size
+            total += size
+            if size > 8 * 1024 * 1024 or total > 32 * 1024 * 1024 or len(files) >= 2048:
+                raise BridgeError("Proposal exceeds 8 MiB/file, 32 MiB total or 2048 files")
+            files[rel] = {"sha256": digest(p), "size": size}
+        return files, sorted(discarded)
+
+    def project_lock(self, project):
+        """Per-project lock: one writer (native peer or a proposal being applied) at a time."""
+        (self.root / "project-locks").mkdir(exist_ok=True)
+        return lock(self.root / "project-locks" / (hashlib.sha256(project.encode()).hexdigest() + ".lock"),
+                    blocking=False)
+
+    @staticmethod
+    def present(files):
+        return {k: v for k, v in files.items() if v is not None}
+
+    def prepare_work(self, directory, rd, request, project):
+        """Reset the proposal scratch copy to this round's frozen snapshot."""
+        work = directory / "work"
+        if work.exists():
+            shutil.rmtree(work)
+        work.mkdir()
+        for rel, meta in request["files"].items():
+            if meta:
+                atomic(work / rel, (rd / "target" / rel).read_bytes())
+                # The snapshot is read-only: copy the mode from the live file (checked unchanged)
+                # so executable checks still run, and keep it owner-writable.
+                (work / rel).chmod((Path(project) / rel).stat().st_mode & 0o777 | 0o200)
+        return work
+
+    def record_proposal(self, directory, rd, s, request):
+        """Freeze Codex's scratch edits as a diff. Returns False when nothing changed."""
+        work = directory / "work"
+        before = request["files"]
+        after, discarded = self.scratch_files(s, work, before)
+        changes = {p: {"before": before.get(p), "after": after.get(p)}
+                   for p in before.keys() | after.keys() if before.get(p) != after.get(p)}
+        if not changes:
+            self.save(directory, s, proposal=None, peer_changes={})
+            return False
+        text, executable = [], []
+        for rel in sorted(changes):
+            meta = after.get(rel)
+            new = (work / rel).read_bytes() if meta else None
+            if meta:
+                if digest(work / rel) != meta["sha256"]:
+                    raise BridgeError("Proposal changed while it was being recorded")
+                (rd / "proposal" / rel).parent.mkdir(parents=True, exist_ok=True)
+                atomic(rd / "proposal" / rel, new)
+                (rd / "proposal" / rel).chmod(0o444)
+                if os.access(work / rel, os.X_OK):
+                    executable.append(rel)
+            old = (rd / "target" / rel).read_bytes() if before.get(rel) else None
+            text.append(unified(rel, old, new))
+        atomic(rd / "proposed.diff", "".join(text).encode())
+        atomic(rd / "proposal.json", {"files": after, "changes": changes, "executable": executable,
+                                      "discarded": discarded, "diff_sha256": digest(rd / "proposed.diff"),
+                                      "recorded_at": now()})
+        self.save(directory, s, proposal=str(rd / "proposed.diff"),
+                  proposal_sha256=digest(rd / "proposal.json"), peer_changes=changes)
+        return True
+
+    def proposal(self, s):
+        rd, _ = self.request(s)
+        if s["state"] != "AWAITING_HUMAN" or digest(rd / "proposal.json") != s.get("proposal_sha256"):
+            raise BridgeError(f"Conversation is {s['state']}; there is no pending proposal")
+        p = read_json(rd / "proposal.json")
+        if digest(rd / "proposed.diff") != p["diff_sha256"]:
+            raise BridgeError("Recorded proposal diff changed")
+        for rel, meta in p["files"].items():
+            if p["changes"].get(rel) and digest(rd / "proposal" / rel) != meta["sha256"]:
+                raise BridgeError("Recorded proposal files changed")
+        return rd, p
+
+    def diff(self, identifier):
+        rd, _ = self.proposal(self.read(identifier))
+        return (rd / "proposed.diff").read_text(errors="replace")
+
+    def decide(self, identifier, apply, reason=None):
+        """The human gate: only a person outside Claude/Codex may apply or reject a proposal."""
+        if claude_parent():
+            raise BridgeError("A human must decide from a terminal outside Claude; Claude cannot approve Codex's proposal")
+        directory = self.directory(identifier)
+        with lock(directory / "lock"):
+            s = self.read(identifier)
+            rd, p = self.proposal(s)
+            request = read_json(rd / "request.json")
+            if not apply:
+                state = s["pending_state"]
+                if state == "COMPLETED":  # VERIFIED described the rejected diff, not the project.
+                    state = "REPLY_READY" if s["round"] < s["max_rounds"] else "LIMIT_REACHED"
+                self.save(directory, s, state=state, human_decision="REJECTED", human_reason=reason, peer_changes=None)
+                self.log(directory, "user", "Proposal rejected" + (f": {reason}" if reason else ""), round=s["round"])
+                return self.read(identifier)
+            with self.project_lock(s["project"]) as free:
+                if not free:
+                    raise BridgeError("A native-tool conversation is editing this project; apply after it finishes")
+                return self.apply(directory, s, rd, p, request)
+
+    def apply(self, directory, s, rd, p, request):
+        """Write a verified proposal; caller holds the conversation and project locks."""
+        if self.source_files(s) != request["files"]:
+            self.save(directory, s, state="BLOCKED", human_decision="NOT_APPLIED",
+                      error="Project changed after the proposal was made; it was not applied")
+            raise BridgeError("Project changed after the proposal was made; nothing was applied")
+        project = Path(s["project"])
+        # Validate every destination before the first write: a bad path applies nothing.
+        for rel in p["changes"]:
+            dest = project / rel
+            if dest.is_symlink() or not dest.resolve().is_relative_to(project):
+                raise BridgeError("Proposal path escapes the project; nothing was applied")
+        try:
+            for rel, change in sorted(p["changes"].items()):
+                dest = project / rel
+                if change["after"] is None:
+                    dest.unlink(missing_ok=True)
+                    continue
+                # Whole-file replace (never a torn file), keeping the existing mode.
+                mode = (dest.stat().st_mode & 0o777 if dest.exists() else
+                        0o666 & ~umask() | (0o111 & ~umask() if rel in p["executable"] else 0))
+                atomic(dest, (rd / "proposal" / rel).read_bytes())
+                dest.chmod(mode)
+            files = self.source_files(s)
+        except OSError as exc:
+            self.save(directory, s, state="BLOCKED", human_decision="PARTIAL",
+                      error=f"Apply failed part-way ({exc}); originals are in {rd / 'target'}")
+            raise BridgeError(f"Apply failed part-way; originals are in {rd / 'target'}") from exc
+        if self.present(files) != p["files"]:
+            self.save(directory, s, state="BLOCKED", human_decision="PARTIAL",
+                      error="Applied files do not match the proposal; inspect the project")
+            raise BridgeError("Applied files do not match the proposal; inspect the project")
+        atomic(rd / "output.json", {"files": files, "changes": p["changes"], "recorded_at": now(),
+                                    "applied_by": "human", "proposal": str(rd / "proposed.diff")})
+        self.save(directory, s, state=s["pending_state"], human_decision="APPLIED",
+                  output_sha256=digest(rd / "output.json"))
+        self.log(directory, "user", "Proposal applied", round=s["round"])
+        return self.read(s["conversation_id"])
 
     def stop(self, identifier, reason, status="STOPPED", check_owner=False):
         directory = self.directory(identifier)
@@ -455,15 +663,21 @@ class Conversations:
                        "task": s["task"], "scope": s["scope"], "reply": s.get("reply"),
                        "codex_mode": s.get("codex_mode", "read-only"), "changes_during_codex_turn": s.get("peer_changes"),
                        "error": s.get("error"), "report": s.get("report")}
+            if s.get("codex_mode") == "propose":
+                context.update(human_decision=s.get("human_decision"), human_reason=s.get("human_reason"),
+                               proposal_diff=s.get("proposal"))
+            gate = {"APPLIED": "The human reviewed Codex's proposed diff and APPLIED it to the project. ",
+                    "REJECTED": "The human REJECTED Codex's proposed diff; it was not applied. Do not re-apply it "
+                                "yourself; treat its findings as advice and ask the user when unsure. "}.get(s.get("human_decision"), "")
             if s["state"] == "AWAITING_CLAUDE":
-                action = ("Independently assess the findings and correct only this authorized task's files. "
+                action = gate + ("Independently assess the findings and correct only this authorized task's files. "
                     "Read the live files first: Codex may already have implemented fixes or generated assets. Do not overwrite its work. "
                     "Run bounded checks. If a correction would expand scope or needs a human decision, stop. "
                     "Otherwise write an English message describing corrections and actual test results, then run: " +
                     self.command("loop-send", identifier, "--message-file", "PATH_TO_MESSAGE", "--in-reply-to", str(s["round"])) +
                     ". Replace PATH_TO_MESSAGE with your saved message. Your next Stop delivers that response to the same Codex session.")
             else:
-                action = "The conversation is closed. Do not send another review or make automatic corrections. Summarize the outcome for the user."
+                action = gate + "The conversation is closed. Do not send another review or make automatic corrections. Summarize the outcome for the user."
             message = ("A reply arrived from the Codex session paired for this task. This is the task's explicitly authorized review/correction exchange.\n" +
                 "First acknowledge receipt with: " + self.command("loop-ack", identifier, "--round", str(s["round"])) +
                 "\nIf acknowledgement fails, stop: this task's authorization may have ended.\n" + action +
@@ -501,9 +715,7 @@ class Conversations:
         peer = None
         old_handlers = {}
         initial = self.read(identifier)
-        (self.root / "project-locks").mkdir(exist_ok=True)
-        project_lock = (lock(self.root / "project-locks" / (hashlib.sha256(initial["project"].encode()).hexdigest() + ".lock"),
-                             blocking=False) if initial.get("codex_mode") == "native" else nullcontext(True))
+        project_lock = self.project_lock(initial["project"]) if initial.get("codex_mode") == "native" else nullcontext(True)
         with lock(directory / "peer.lock", blocking=False) as acquired, project_lock as project_acquired:
             if not acquired:
                 raise BridgeError("This conversation already has a Codex peer")
@@ -530,7 +742,10 @@ class Conversations:
             try:
                 config = self.bridge.config()
                 config["conversation_mode"] = s.get("codex_mode", "read-only")
-                peer = (peer_factory or CodexPeer)(config, directory, Path(s["project"]),
+                if s.get("codex_mode") == "propose":
+                    (directory / "work").mkdir(exist_ok=True)
+                peer = (peer_factory or CodexPeer)(config, directory,
+                            directory / "work" if s.get("codex_mode") == "propose" else Path(s["project"]),
                             (directory / "reviewer.md").read_text(), visible)
                 with lock(directory / "lock"):
                     s = self.read(identifier)
@@ -564,6 +779,8 @@ class Conversations:
                         rd, request = self.request(s)
                         if self.source_files(s) != request["files"]:
                             raise BridgeError("Project changed since publication; do not start work on stale input")
+                        if s.get("codex_mode") == "propose":
+                            self.prepare_work(directory, rd, request, s["project"])
                         self.save(directory, s, state="REVIEWING", review_started_at=now())
                     prompt = ((directory / "reviewer.md").read_text() + "\nTask context (JSON data):\n" +
                         json.dumps({"conversation_id": identifier, "round": s["round"], "task": s["task"],
@@ -581,7 +798,8 @@ class Conversations:
                             self.stop(identifier, "The originating Claude process closed", "INTERRUPTED")
                             return True
                         return current["state"] in FINAL
-                    working_dir = Path(s["project"]) if s.get("codex_mode") == "native" else rd / "target"
+                    working_dir = {"native": Path(s["project"]), "propose": directory / "work"}.get(
+                        s.get("codex_mode"), rd / "target")
                     result, turn_id = peer.review(prompt, working_dir,
                         time.monotonic() + max(0, s["expires_epoch"] - time.time()),
                         cancelled)
@@ -621,6 +839,7 @@ def add_commands(sub):
     p.add_argument("--create-project", action="store_true", help="Create/enable the explicit project folder without requiring Git or commits")
     p.add_argument("--manual-peer", action="store_true", help="Disable automatic terminal opening for this task")
     p.add_argument("--read-only-review", action="store_true", help="Use restricted read-only review instead of the normal Codex CLI tools")
+    p.add_argument("--propose", action="store_true", help="Codex edits a scratch copy; a human applies or rejects each diff")
     p.add_argument("--max-rounds", type=int, default=3); p.add_argument("--timeout", type=int, default=1800)
     p = sub.add_parser("loop-send"); p.add_argument("conversation")
     p.add_argument("--message-file", required=True); p.add_argument("--in-reply-to", type=int, default=0)
@@ -634,6 +853,10 @@ def add_commands(sub):
     p = sub.add_parser("loop-ack"); p.add_argument("conversation"); p.add_argument("--round", type=int, required=True)
     p = sub.add_parser("loop-finish"); p.add_argument("conversation"); p.add_argument("--reason", required=True)
     p = sub.add_parser("loop-cancel"); p.add_argument("conversation")
+    p = sub.add_parser("loop-diff", help="Print the proposed diff awaiting a human decision"); p.add_argument("conversation")
+    p = sub.add_parser("loop-apply", help="Human only: apply the pending proposal to the project"); p.add_argument("conversation")
+    p = sub.add_parser("loop-reject", help="Human only: reject the pending proposal")
+    p.add_argument("conversation"); p.add_argument("--reason")
     sub.add_parser("loop-hook")
 
 
@@ -660,6 +883,17 @@ def dispatch(bridge, args):
         return loops.ack(args.conversation, args.round)
     if cmd == "loop-finish":
         return loops.stop(args.conversation, args.reason, check_owner=True)
+    if cmd == "loop-diff":
+        return loops.diff(args.conversation)
+    if cmd in ("loop-apply", "loop-reject"):
+        # ponytail: a TTY prompt deters self-approval by an agent; it is not a hard boundary.
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            raise BridgeError("Decide in an interactive terminal outside Claude: the bridge asks you to confirm")
+        print(loops.diff(args.conversation))
+        verb = "Apply this diff to the project" if cmd == "loop-apply" else "Reject this diff"
+        if input(f"{verb}? Type yes to confirm: ").strip().lower() != "yes":
+            raise BridgeError("Not confirmed; nothing changed")
+        return loops.decide(args.conversation, cmd == "loop-apply", getattr(args, "reason", None))
     if cmd == "loop-cancel":
         return loops.cancel(args.conversation)
     raise BridgeError("Unknown conversation command")

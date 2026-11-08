@@ -23,6 +23,11 @@ skills, MCP servers, apps, web/browser and image tools available in its CLI. Its
 and normal approval requests remain active. Do not call it a tool-less or read-only reviewer.
 Do not invent an available integration or image model. Scope required asset directories
 with --file. Use --read-only-review only if the user asks for restricted review.
+Use --propose when the user wants to see Codex's changes before they are applied. In that
+mode Codex edits a scratch copy and the exchange waits for a human decision. Put the returned
+loop-diff, loop-apply and loop-reject commands in your final response, tell the user to run
+them in a terminal outside Claude and not to send you a new prompt while a proposal waits.
+Never run loop-apply or loop-reject yourself.
 
 Finish the requested work, or prepare an explicitly requested bounded implementation
 handoff for Codex. Save the English message inside the returned conversation directory;

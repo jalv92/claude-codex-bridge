@@ -138,6 +138,22 @@ class SocketTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "checked"):
             peer.review("data", Path("/project"), time.monotonic() + 1, lambda: False)
 
+    def test_propose_turn_pins_scratch_only_offline_sandbox(self):
+        from codex_peer import PROPOSE_SANDBOX
+        peer = CodexPeer.__new__(CodexPeer)
+        peer.native = True; peer.propose = True; peer.thread_id = "thread"
+        class InspectRpc:
+            events = queue.Queue()
+            def call(_self, method, params, **kwargs):
+                self.assertEqual(params["approvalPolicy"], "never")
+                self.assertEqual(params["sandboxPolicy"], PROPOSE_SANDBOX)
+                self.assertFalse(params["sandboxPolicy"]["networkAccess"])
+                self.assertEqual(params["cwd"], "/scratch")
+                raise RuntimeError("checked")
+        peer.rpc = InspectRpc()
+        with self.assertRaisesRegex(RuntimeError, "checked"):
+            peer.review("data", Path("/scratch"), time.monotonic() + 1, lambda: False)
+
     def test_native_rpc_leaves_approvals_and_tool_requests_to_the_tui(self):
         requests = [{"id": i, "method": method, "params": {"threadId": "thread"}}
                     for i, method in enumerate(("item/commandExecution/requestApproval",

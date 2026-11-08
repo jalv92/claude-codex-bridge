@@ -46,7 +46,7 @@ python3 scripts/setup.py --project /absolute/path/to/project --manual-peer
 The installed command tells Claude to use `loop-begin --manual-peer`. Open the exact
 returned `loop-peer CONVERSATION_ID` command in another terminal. This still connects
 one dedicated Codex session and sends replies automatically. Native mode needs a visible
-console; `--headless` requires a task explicitly armed with `--read-only-review`.
+console; `--headless` requires a task explicitly armed with `--read-only-review` or `--propose`.
 
 ## Claude command discovery
 

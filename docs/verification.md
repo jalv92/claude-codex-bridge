@@ -36,3 +36,17 @@ not proof that every integration or model is compatible.
 The public packaging changes are checked offline and with installer diagnostics. They do
 not require another model audit. Image generation, browser and external integrations have
 not all been individually exercised by this test suite.
+
+## Proposal mode (`--propose`)
+
+Added 2026-11-07. The offline suites cover the human gate end to end with a fake peer:
+the diff waits without waking Claude, apply writes only the scoped changes, reject leaves
+the project untouched and returns a VERIFIED round to Claude, a project changed after the
+proposal is refused, apply waits for a native editor's project lock, and the CLI requires
+an interactive `yes`. Scratch inventories keep snapshot files (so tracked-but-ignored files
+are never proposed as deletions) and discard new ignored files, caches and links.
+
+A no-model probe against native Codex CLI 0.167.0 started the private app-server and a
+proposal thread without any turn. The server reported exactly the pinned policy
+(`workspaceWrite`, no writable roots, no network, approval `never`) with MCP servers, apps
+and plugins disabled. **A full proposal round with a real model has not been run yet.**

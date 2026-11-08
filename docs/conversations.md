@@ -27,7 +27,10 @@ trade or launch a training campaign on a peer's authority. For research, disting
 implementation correctness from economic success.
 
 Native-tool mode is the default. `--read-only-review` explicitly selects the restricted
-reviewer. Existing frozen conversations keep their original mode. `--manual-peer` disables
+reviewer. `--propose` lets Codex edit only a scratch copy: each round's diff waits in
+AWAITING_HUMAN until the user runs `loop-apply` or `loop-reject` outside Claude. Claude puts
+the returned `loop-diff`/`loop-apply`/`loop-reject` commands in its final response and never
+runs them itself. Existing frozen conversations keep their original mode. `--manual-peer` disables
 automatic opening for that task; use the exact peer command in a second terminal.
 
 ## Status and reports
@@ -48,6 +51,7 @@ Use the exact ID returned for the task. Under `tmp/claude-codex-bridge/conversat
 | `terminal.log`, `server.stderr.log` | Launch and server diagnostics |
 | `round-NNN/input.txt`, `request.json`, `target/` | Frozen input and snapshot |
 | `round-NNN/output.json`, `output/` | Native-mode resulting files and change inventory |
+| `round-NNN/proposed.diff`, `proposal.json`, `proposal/` | Proposal-mode diff awaiting a human decision |
 | `round-NNN/result.json`, `report.md`, `feedback.txt` | Structured verdict, report and callback |
 
 `wake_status: EMITTED` means the hook emitted feedback. `ACKNOWLEDGED` proves that Claude
