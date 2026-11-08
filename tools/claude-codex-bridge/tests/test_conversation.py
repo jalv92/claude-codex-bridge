@@ -459,6 +459,9 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual((self.repo / "example.py").read_text(), "value = 2\n")
         self.assertIn("+value = 2", out.getvalue()); self.assertIn("Type yes or no", out.getvalue())
         self.assertIn("APPLIED", feedback)
+        decisions = [json.loads(l) for l in open(self.loops.directory(self.id) / "messages.jsonl")
+                     if '"decision"' in l]
+        self.assertEqual([(d["decision"], d["via"]) for d in decisions], [("APPLIED", "codex-window")])
 
     def test_propose_window_reject_passes_reason_to_claude(self):
         peer, hook = self.propose_round()
@@ -466,6 +469,8 @@ class ConversationTests(unittest.TestCase):
         with patch("conversation.claude_parent", return_value=None), contextlib.redirect_stdout(io.StringIO()):
             self.loops.ask_in_window(self.id, lambda: next(lines))
         self.assertEqual((self.repo / "example.py").read_text(), "value = 1\n")
+        s = self.loops.read(self.id)
+        self.assertEqual((s["human_decision"], s["human_via"], s["human_reason"]), ("REJECTED", "codex-window", "Too broad"))
         self.assertIn("Too broad", hook.result(timeout=5))
         self.loops.cancel(self.id); peer.result(timeout=5)
 

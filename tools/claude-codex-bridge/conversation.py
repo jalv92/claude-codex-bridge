@@ -321,7 +321,8 @@ class Conversations:
             self.save(directory, s, state="READY", round=round_number,
                 request_sha256=digest(final / "request.json"), acknowledged_round=in_reply_to,
                 reply=None, error=None, wake_status=None, report=None, output_sha256=None, peer_changes=None,
-                proposal=None, proposal_sha256=None, pending_state=None, human_decision=None, human_reason=None)
+                proposal=None, proposal_sha256=None, pending_state=None, human_decision=None, human_reason=None,
+                human_via=None)
             self.log(directory, "claude", body, round=round_number, in_reply_to=in_reply_to)
         return {"conversation_id": identifier, "round": round_number, "state": "READY",
                 "dispatch": "Your matching Stop hook will deliver this message to the paired Codex session"}
@@ -564,7 +565,7 @@ class Conversations:
             if not apply and reason is None:
                 return
             try:
-                self.decide(identifier, apply, reason or None)
+                self.decide(identifier, apply, reason or None, via="codex-window")
                 print(("Applied to the project." if apply else "Rejected. Nothing changed.") +
                       " Claude continues on its own.", flush=True)
                 return
@@ -576,7 +577,7 @@ class Conversations:
             print("The proposal is still waiting. Answer again here, or use loop-apply / loop-reject "
                   "from another terminal outside Claude.", flush=True)
 
-    def decide(self, identifier, apply, reason=None):
+    def decide(self, identifier, apply, reason=None, via="command"):
         """The human gate: only a person outside Claude/Codex may apply or reject a proposal."""
         if claude_parent():
             raise BridgeError("A human must decide from a terminal outside Claude; Claude cannot approve Codex's proposal")
@@ -589,12 +590,15 @@ class Conversations:
                 state = s["pending_state"]
                 if state == "COMPLETED":  # VERIFIED described the rejected diff, not the project.
                     state = "REPLY_READY" if s["round"] < s["max_rounds"] else "LIMIT_REACHED"
-                self.save(directory, s, state=state, human_decision="REJECTED", human_reason=reason, peer_changes=None)
-                self.log(directory, "user", "Proposal rejected" + (f": {reason}" if reason else ""), round=s["round"])
+                self.save(directory, s, state=state, human_decision="REJECTED", human_reason=reason,
+                          human_via=via, peer_changes=None)
+                self.log(directory, "user", "Proposal rejected" + (f": {reason}" if reason else ""),
+                         round=s["round"], decision="REJECTED", via=via)
                 return self.read(identifier)
             with self.project_lock(s["project"]) as free:
                 if not free:
                     raise BridgeError("A native-tool conversation is editing this project; apply after it finishes")
+                s["human_via"] = via
                 return self.apply(directory, s, rd, p, request)
 
     def apply(self, directory, s, rd, p, request):
@@ -633,7 +637,8 @@ class Conversations:
                                     "applied_by": "human", "proposal": str(rd / "proposed.diff")})
         self.save(directory, s, state=s["pending_state"], human_decision="APPLIED",
                   output_sha256=digest(rd / "output.json"))
-        self.log(directory, "user", "Proposal applied", round=s["round"])
+        self.log(directory, "user", "Proposal applied", round=s["round"], decision="APPLIED",
+                 via=s.get("human_via"))
         return self.read(s["conversation_id"])
 
     def stop(self, identifier, reason, status="STOPPED", check_owner=False):
