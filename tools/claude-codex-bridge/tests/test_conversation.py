@@ -538,6 +538,16 @@ class ConversationTests(unittest.TestCase):
         with self.assertRaises(InterruptedError):
             lines(timeout=0)
 
+    def test_stop_from_the_claude_launch_directory_matches(self):
+        # Seen live: armed while Bash sat in the project, Stop came from the launch dir.
+        s = {"claude_cwd": str(self.repo), "project": str(self.repo), "claude_process": process(os.getpid())}
+        launch = os.getcwd()  # the test process plays the originating Claude
+        self.assertTrue(Conversations.matches_cwd(s, launch))
+        self.assertFalse(Conversations.matches_cwd(s, str(self.root)))  # unrelated parent folder
+        self.assertFalse(Conversations.matches_cwd({**s, "claude_process": None}, launch))
+        reused_pid = {**process(os.getpid()), "start": -1}  # same pid, different birth
+        self.assertFalse(Conversations.matches_cwd({**s, "claude_process": reused_pid}, launch))
+
     def test_propose_and_read_only_are_exclusive(self):
         with self.assertRaisesRegex(BridgeError, "propose"):
             self.begin(read_only_review=True, propose=True)

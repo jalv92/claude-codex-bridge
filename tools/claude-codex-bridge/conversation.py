@@ -117,7 +117,16 @@ class Conversations:
     @staticmethod
     def matches_cwd(s, cwd):
         p = Path(cwd).resolve(strict=True)
-        return str(p) == s["claude_cwd"] or p.is_relative_to(Path(s["project"]))
+        if str(p) == s["claude_cwd"] or p.is_relative_to(Path(s["project"])):
+            return True
+        # Bash `cd` moves the hook cwd between turns, so the armed cwd can be a subfolder
+        # while Stop arrives from where Claude was launched. Accept that launch directory,
+        # read from the same (birth-checked) originating Claude process.
+        origin = s.get("claude_process")
+        try:
+            return bool(origin) and alive(origin) and Path(os.readlink(f"/proc/{origin['pid']}/cwd")) == p
+        except OSError:
+            return False
 
     def log(self, directory, sender, text, **details):
         event = {"at": now(), "sender": sender, "text": text, **details}
