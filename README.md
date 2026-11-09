@@ -9,6 +9,7 @@
 
 <p>
   <a href="#choose-a-mode">Choose a mode</a> ·
+  <a href="docs/guide.md">Guide and examples</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -56,6 +57,7 @@ Reviewing and editing are separate permissions. Pick how much Codex may change:
 | A one-off audit of a commit | [Saved review](docs/saved-reviews.md) | Nothing | Nobody: it writes a report |
 
 Every mode stops on a `VERIFIED` verdict or after 3 rounds by default, and never re-arms itself.
+The [guide](docs/guide.md) explains each mode and option with example prompts, and lists what's new.
 
 ### Proposal mode
 
