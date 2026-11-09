@@ -381,6 +381,32 @@ class ConversationTests(unittest.TestCase):
         self.assertEqual((self.repo / "example.py").read_text(), "someone else edited this\n")
         self.assertEqual(self.loops.read(self.id)["state"], "BLOCKED")
         hook.result(timeout=5); peer.result(timeout=5)
+        # The refusal is part of the conversation history, like an apply or a reject.
+        events = [json.loads(line) for line in (self.loops.directory(self.id) / "messages.jsonl").open()]
+        self.assertIn("NOT_APPLIED", [e.get("decision") for e in events])
+        # Claude's acknowledgement is still refused, but must not replace the specific reason.
+        with self.assertRaisesRegex(BridgeError, "Source changed"):
+            self.loops.ack(self.id, 1, check_owner=False)
+        self.assertIn("Project changed after the proposal was made", self.loops.read(self.id)["error"])
+
+    def test_blocked_without_reason_still_records_a_later_source_change(self):
+        self.begin()
+        self.send()
+        class StuckPeer:
+            thread_id, ui = "stuck-thread", None
+            def __init__(_self, *args): pass
+            def review(_self, prompt, cwd, deadline, cancelled): return result("NOT_VERIFIABLE"), "1"
+            def close(_self): pass
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.addCleanup(pool.shutdown, wait=True, cancel_futures=True)
+        peer = pool.submit(self.loops.peer, self.id, False, StuckPeer)
+        self.assertIn("BLOCKED", pool.submit(self.loops.hook, self.event()).result(timeout=5))
+        self.assertIsNone(self.loops.read(self.id)["error"])  # NOT_VERIFIABLE blocks without a reason
+        (self.repo / "example.py").write_text("edited after the reply\n")
+        with self.assertRaisesRegex(BridgeError, "Source changed"):
+            self.loops.ack(self.id, 1, check_owner=False)
+        self.assertIn("Source changed before acknowledgement", self.loops.read(self.id)["error"] or "")
+        peer.result(timeout=5)
 
     def test_propose_scratch_inventory_keeps_known_files_and_discards_junk(self):
         self.begin(read_only_review=False, propose=True, files=["example.py", "data"])

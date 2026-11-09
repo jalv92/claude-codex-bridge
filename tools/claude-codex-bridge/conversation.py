@@ -603,9 +603,11 @@ class Conversations:
 
     def apply(self, directory, s, rd, p, request):
         """Write a verified proposal; caller holds the conversation and project locks."""
+        def refuse(decision, error):  # a blocked or partial apply is logged, like APPLIED and REJECTED
+            self.save(directory, s, state="BLOCKED", human_decision=decision, error=error)
+            self.log(directory, "user", error, round=s["round"], decision=decision, via=s.get("human_via"))
         if self.source_files(s) != request["files"]:
-            self.save(directory, s, state="BLOCKED", human_decision="NOT_APPLIED",
-                      error="Project changed after the proposal was made; it was not applied")
+            refuse("NOT_APPLIED", "Project changed after the proposal was made; it was not applied")
             raise BridgeError("Project changed after the proposal was made; nothing was applied")
         project = Path(s["project"])
         # Validate every destination before the first write: a bad path applies nothing.
@@ -626,12 +628,10 @@ class Conversations:
                 dest.chmod(mode)
             files = self.source_files(s)
         except OSError as exc:
-            self.save(directory, s, state="BLOCKED", human_decision="PARTIAL",
-                      error=f"Apply failed part-way ({exc}); originals are in {rd / 'target'}")
+            refuse("PARTIAL", f"Apply failed part-way ({exc}); originals are in {rd / 'target'}")
             raise BridgeError(f"Apply failed part-way; originals are in {rd / 'target'}") from exc
         if self.present(files) != p["files"]:
-            self.save(directory, s, state="BLOCKED", human_decision="PARTIAL",
-                      error="Applied files do not match the proposal; inspect the project")
+            refuse("PARTIAL", "Applied files do not match the proposal; inspect the project")
             raise BridgeError("Applied files do not match the proposal; inspect the project")
         atomic(rd / "output.json", {"files": files, "changes": p["changes"], "recorded_at": now(),
                                     "applied_by": "human", "proposal": str(rd / "proposed.diff")})
@@ -756,8 +756,10 @@ class Conversations:
                     return None
                 if s.get("reply"):
                     if self.source_files(s) != self.expected_files(s):
+                        # Keep a more specific reason already recorded, e.g. a refused apply.
+                        s["error"] = (s["state"] == "BLOCKED" and s.get("error")) or \
+                            "Source changed before feedback delivery; do not apply stale findings"
                         s["state"] = "BLOCKED"
-                        s["error"] = "Source changed before feedback delivery; do not apply stale findings"
                 next_state = "AWAITING_CLAUDE" if s["state"] == "REPLY_READY" else s["state"]
                 self.save(directory, s, state=next_state, delivered_round=s["round"], wake_status="EMITTED")
                 self.log(directory, "coordinator", "Feedback emitted to the originating Claude Stop hook",
@@ -806,7 +808,8 @@ class Conversations:
                 raise BridgeError("No matching delivered round can be acknowledged")
             if s.get("reply"):
                 if self.source_files(s) != self.expected_files(s):
-                    self.save(directory, s, state="BLOCKED", error="Source changed before acknowledgement")
+                    self.save(directory, s, state="BLOCKED", error=(s["state"] == "BLOCKED" and s.get("error"))
+                              or "Source changed before acknowledgement")
                     raise BridgeError("Source changed before acknowledgement; do not apply stale feedback")
             self.save(directory, s, acknowledged_round=number, wake_status="ACKNOWLEDGED")
             self.log(directory, "claude", "Feedback receipt acknowledged", round=number)
