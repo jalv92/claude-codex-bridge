@@ -112,6 +112,15 @@ def terminate_owned(identities):
                 pass
 
 
+def is_claude(exe, argv):
+    exe = Path(exe)
+    # The native installer runs ~/.local/share/claude/versions/<version>, whose basename
+    # is the version, not "claude" (office machine, Claude 2.1.319, 2026-11-09).
+    return (exe.name in ("claude", "claude.exe")
+            or (exe.parent.name == "versions" and exe.parent.parent.name == "claude")
+            or any(b"@anthropic-ai/claude-code" in a for a in argv))
+
+
 def claude_parent():
     pid = os.getppid()
     for _ in range(64):
@@ -119,10 +128,8 @@ def claude_parent():
         if not p:
             return None
         try:
-            name = Path(os.readlink(f"/proc/{pid}/exe")).name
             argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[:2]
-            if name in ("claude", "claude.exe") or any(
-                    b"@anthropic-ai/claude-code" in a for a in argv):
+            if is_claude(os.readlink(f"/proc/{pid}/exe"), argv):
                 return p
         except OSError:
             pass

@@ -370,5 +370,16 @@ subprocess.run(base+["arm","--project",sys.argv[3],"--task","auto-session"], che
         self.assertIn('allow_login_shell=false', cmd)
 
 
+class ClaudeDetectionTest(unittest.TestCase):
+    def test_native_installer_and_npm(self):
+        from runtime import is_claude
+        self.assertTrue(is_claude("/home/u/.local/share/claude/versions/2.1.319", [b"/home/u/.local/bin/claude"]))
+        self.assertTrue(is_claude("/usr/bin/node", [b"node", b"/x/node_modules/@anthropic-ai/claude-code/cli.js"]))
+        self.assertTrue(is_claude("/usr/local/bin/claude", []))
+        self.assertFalse(is_claude("/usr/bin/python3.12", [b"python3", b"bridge.py"]))
+        self.assertFalse(is_claude("/opt/other/versions/1.0", [b"other"]))
+
+
+
 if __name__ == "__main__":
     unittest.main()
